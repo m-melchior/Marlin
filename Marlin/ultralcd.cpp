@@ -303,9 +303,15 @@ uint16_t max_display_update_time = 0;
 
   #define MENU_BACK(LABEL) MENU_ITEM(back, LABEL, 0)
 
+  #define MENU_ITEM_ADDON_START(X) \
+    if (lcdDrawUpdate && _menuLineNr == _thisItemNr - 1) { \
+      SETCURSOR(X, _lcdLineNr)
+
+  #define MENU_ITEM_ADDON_END() } (0)
+
   // Used to print static text with no visible cursor.
   // Parameters: label [, bool center [, bool invert [, char *value] ] ]
-  #define STATIC_ITEM(LABEL, ...) \
+  #define STATIC_ITEM(LABEL, ...) do{ \
     if (_menuLineNr == _thisItemNr) { \
       if (_skipStatic && encoderLine <= _thisItemNr) { \
         encoderPosition += ENCODER_STEPS_PER_MENU_ITEM; \
@@ -314,7 +320,7 @@ uint16_t max_display_update_time = 0;
       if (lcdDrawUpdate) \
         lcd_implementation_drawmenu_static(_lcdLineNr, PSTR(LABEL), ## __VA_ARGS__); \
     } \
-    ++_thisItemNr
+    ++_thisItemNr; }while(0)
 
   #if ENABLED(ENCODER_RATE_MULTIPLIER)
 
@@ -602,6 +608,52 @@ uint16_t max_display_update_time = 0;
 
 #endif // ULTIPANEL
 
+void lcd_resume_menu_ok(void) {
+  char tmp_n[64 + 10];
+  powerloss.recovery = Rec_Idle;
+  //Config_StoreSettings();
+  //Config_RetrieveSettings();
+  lcd_return_to_status();
+  // enqueuecommand("M930");
+  powerloss.recovery = Rec_Recovering1;
+  enable_Z();
+  sprintf_P(tmp_n, PSTR("G92 Z%u.%u"), powerloss.Z_t / 10, powerloss.Z_t % 10);
+  enqueue_and_echo_command(tmp_n);
+
+  sprintf_P(tmp_n, PSTR("G92 E%u"), powerloss.E_t);
+  enqueue_and_echo_command(tmp_n);
+
+  sprintf_P(tmp_n, PSTR("M104 S%u"), powerloss.T0_t);
+  enqueue_and_echo_command(tmp_n);
+}
+
+void lcd_resume_menu_cancel(void) {
+  char tmp_n[64 + 10];
+  //Config_StoreSettings();
+  //Config_RetrieveSettings();
+  powerloss.recovery = Rec_Idle;
+  powerloss.P_file_name[0] = 0;
+  ZERO(powerloss.print_dir);
+  //(void)settings.poweroff_save();
+  sprintf_P(tmp_n, PSTR("M500"));
+  enqueue_and_echo_command(tmp_n);
+  lcd_return_to_status();
+}
+
+void lcd_resume_menu(void) {
+  START_MENU();
+
+  STATIC_ITEM(MSG_POWER_OUTAGE);
+  MENU_ITEM(function, MSG_RESUME_PRINT, lcd_resume_menu_ok);
+  MENU_ITEM(function, MSG_CANCEL_PRINT, lcd_resume_menu_cancel);
+
+  END_MENU();
+}
+
+void lcd_goto_resume_menu(void) {
+  lcd_goto_screen(lcd_resume_menu);
+}
+
 /**
  *
  * "Info Screen"
@@ -610,7 +662,7 @@ uint16_t max_display_update_time = 0;
  */
 
 void lcd_status_screen() {
-
+  //if (powerloss.recovery == Rec_Outage) return;
   #if ENABLED(ULTIPANEL)
     ENCODER_DIRECTION_NORMAL();
     ENCODER_RATE_MULTIPLY(false);
@@ -790,6 +842,8 @@ void kill_screen(const char* lcd_msg) {
         print_job_timer.start();
       #endif
       lcd_reset_status();
+      //strncpy_P(lcd_status_message, powerloss.P_file_name, 13);//jone-181107
+       lcd_status_printf_P(0, PSTR("%s"), powerloss.P_file_name);
     }
 
     void lcd_sdcard_stop() {
@@ -861,9 +915,9 @@ void kill_screen(const char* lcd_msg) {
       bar_percent = constrain(bar_percent, 0, 100);
       encoderPosition = 0;
       lcd_implementation_drawmenu_static(0, PSTR(MSG_PROGRESS_BAR_TEST), true, true);
-      lcd.setCursor((LCD_WIDTH) / 2 - 2, LCD_HEIGHT - 2);
-      lcd.print(itostr3(bar_percent)); lcd.write('%');
-      lcd.setCursor(0, LCD_HEIGHT - 1); lcd_draw_progress_bar(bar_percent);
+      SETCURSOR((LCD_WIDTH) / 2 - 2, LCD_HEIGHT - 2);
+      LCDPRINT(itostr3(bar_percent)); LCDWRITE('%');
+      SETCURSOR(0, LCD_HEIGHT - 1); lcd_draw_progress_bar(bar_percent);
     }
 
     void _progress_bar_test() {
@@ -2901,6 +2955,8 @@ void kill_screen(const char* lcd_msg) {
       lcd_implementation_drawedit(name, move_menu_scale >= 0.1 ? ftostr41sign(pos) : ftostr43sign(pos));
     }
   }
+
+
   void lcd_move_x() { _lcd_move_xyz(PSTR(MSG_MOVE_X), X_AXIS); }
   void lcd_move_y() { _lcd_move_xyz(PSTR(MSG_MOVE_Y), Y_AXIS); }
   void lcd_move_z() { _lcd_move_xyz(PSTR(MSG_MOVE_Z), Z_AXIS); }
@@ -3002,10 +3058,17 @@ void kill_screen(const char* lcd_msg) {
           STATIC_ITEM(MSG_MOVE_E, true, true); break;
       }
     }
-    MENU_BACK(MSG_MOVE_AXIS);
-    MENU_ITEM(submenu, MSG_MOVE_10MM, lcd_move_menu_10mm);
-    MENU_ITEM(submenu, MSG_MOVE_1MM, lcd_move_menu_1mm);
-    MENU_ITEM(submenu, MSG_MOVE_01MM, lcd_move_menu_01mm);
+    #if ENABLED(PREVENT_COLD_EXTRUSION)
+      if (axis == E_AXIS && thermalManager.tooColdToExtrude(active_extruder))
+        MENU_BACK(MSG_HOTEND_TOO_COLD);
+      else
+    #endif
+    {
+      MENU_BACK(MSG_MOVE_AXIS);
+      MENU_ITEM(submenu, MSG_MOVE_10MM, lcd_move_menu_10mm);
+      MENU_ITEM(submenu, MSG_MOVE_1MM, lcd_move_menu_1mm);
+      MENU_ITEM(submenu, MSG_MOVE_01MM, lcd_move_menu_01mm);
+    }
     END_MENU();
   }
   void lcd_move_get_x_amount()        { _lcd_move_distance_menu(X_AXIS, lcd_move_x); }
@@ -3595,7 +3658,9 @@ void kill_screen(const char* lcd_msg) {
     #if ENABLED(BABYSTEP_ZPROBE_OFFSET)
       MENU_ITEM(submenu, MSG_ZPROBE_ZOFFSET, lcd_babystep_zoffset);
     #elif HAS_BED_PROBE
-      MENU_ITEM_EDIT(float32, MSG_ZPROBE_ZOFFSET, &zprobe_zoffset, Z_PROBE_OFFSET_RANGE_MIN, Z_PROBE_OFFSET_RANGE_MAX);
+//      MENU_ITEM_EDIT(float32, MSG_ZPROBE_ZOFFSET, &zprobe_zoffset, Z_PROBE_OFFSET_RANGE_MIN, Z_PROBE_OFFSET_RANGE_MAX);
+      MENU_ITEM_EDIT(float32, MSG_ZPROBE_ZOFFSET, &zprobe_zoffset, current_position[Z_AXIS], current_position[Z_AXIS]);
+      MENU_ITEM_EDIT(bool, MSG_SOFTSTOP_ENABLE, &soft_endstops_enabled);
     #endif
 
     // M203 / M205 - Feedrate items
@@ -3627,6 +3692,7 @@ void kill_screen(const char* lcd_msg) {
     START_MENU();
     MENU_BACK(MSG_CONTROL);
 
+
     #if ENABLED(LIN_ADVANCE)
       MENU_ITEM_EDIT(float3, MSG_ADVANCE_K, &planner.extruder_advance_k, 0, 999);
     #endif
@@ -3651,6 +3717,8 @@ void kill_screen(const char* lcd_msg) {
         #endif // EXTRUDERS > 2
       #endif // EXTRUDERS > 1
     }
+    // Filament Runout Sensors
+    MENU_ITEM_EDIT(bool, MSG_RUNOUT_SENSORS, &filament_runout_enabled);
 
     END_MENU();
   }
@@ -3741,6 +3809,7 @@ void kill_screen(const char* lcd_msg) {
       START_MENU();
       MENU_BACK(MSG_MAIN);
       card.getWorkDirName();
+      strcpy(powerloss.print_dir, card.getWorkDirName());
       if (card.filename[0] == '/') {
         #if !PIN_EXISTS(SD_DETECT)
           MENU_ITEM(function, LCD_STR_REFRESH MSG_REFRESH, lcd_sd_refresh);
@@ -3886,6 +3955,11 @@ void kill_screen(const char* lcd_msg) {
       START_SCREEN();
       STATIC_ITEM(BOARD_NAME, true, true);                           // MyPrinterController
       STATIC_ITEM(MSG_INFO_BAUDRATE ": " STRINGIFY(BAUDRATE), true); // Baud: 250000
+
+    // SERIAL_ECHOPAIR("hardware version:", hardware_version);	//liu..
+	  //STATIC_ITEM(MSG_FW_VER, false, true);
+	  STATIC_ITEM("" MSG_FW_VER, true);
+      STATIC_ITEM("    " MSG_HW_VER,false, false, ftostr12ns(hardware_version));//MSG_HW_VER liu
       STATIC_ITEM(MSG_INFO_PROTOCOL ": " PROTOCOL_VERSION, true);    // Protocol: 1.0
       #if POWER_SUPPLY == 0
         STATIC_ITEM(MSG_INFO_PSU ": Generic", true);
@@ -4448,6 +4522,9 @@ void kill_screen(const char* lcd_msg) {
       #endif
       UNUSED(longFilename);
       card.openAndPrintFile(filename);
+      strcpy(powerloss.P_file_name, filename);
+      SERIAL_ECHOLN(powerloss.P_file_name);
+      powerloss.recovery = Rec_Idle;
       lcd_return_to_status();
     }
 
@@ -4475,6 +4552,7 @@ void lcd_init() {
   lcd_implementation_init();
 
   #if ENABLED(NEWPANEL)
+
     #if BUTTON_EXISTS(EN1)
       SET_INPUT_PULLUP(BTN_EN1);
     #endif
@@ -4815,7 +4893,7 @@ void lcd_update() {
       // Return to Status Screen after a timeout
       if (currentScreen == lcd_status_screen || defer_return_to_status)
         return_to_status_ms = ms + LCD_TIMEOUT_TO_STATUS;
-      else if (ELAPSED(ms, return_to_status_ms))
+      else if (ELAPSED(ms, return_to_status_ms) && powerloss.recovery != Rec_Outage)
         lcd_return_to_status();
 
     #endif // ULTIPANEL

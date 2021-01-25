@@ -36,11 +36,12 @@
  *
  */
 
-#define EEPROM_VERSION "V47"
+#define EEPROM_VERSION "V11"
 
 // Change EEPROM version if these are changed:
 #define EEPROM_OFFSET 100
-
+#define EEPROM_OFFSET_POWEROFF 800
+#define EEPROM_OFFSET_SN_VER 880
 /**
  * V47 EEPROM Layout:
  *
@@ -282,7 +283,7 @@ void MarlinSettings::postprocess() {
   #define EEPROM_ASSERT(TST,ERR) if (!(TST)) do{ SERIAL_ERROR_START(); SERIAL_ERRORLNPGM(ERR); eeprom_read_error = true; }while(0)
 
   const char version[4] = EEPROM_VERSION;
-
+float hardware_version=0.1;
   bool MarlinSettings::eeprom_error;
 
   #if ENABLED(AUTO_BED_LEVELING_UBL)
@@ -745,12 +746,118 @@ void MarlinSettings::postprocess() {
       #endif
     }
 
+    (void)settings.poweroff_save();
+
     #if ENABLED(UBL_SAVE_ACTIVE_ON_M500)
       if (ubl.storage_slot >= 0)
         store_mesh(ubl.storage_slot);
     #endif
 
     return !eeprom_error;
+  }
+
+  bool MarlinSettings::poweroff_save() {
+    uint16_t working_crc = 0;
+    EEPROM_START();
+    eeprom_index = EEPROM_OFFSET_POWEROFF;
+
+    EEPROM_SKIP(working_crc); // Skip the checksum slot
+    working_crc = 0;
+
+    // Power Loss Recovery
+    EEPROM_WRITE(powerloss);
+
+    // Filament Runout Sensors
+    EEPROM_WRITE(filament_runout_enabled);
+
+    const uint16_t final_crc = working_crc;
+    const int eeprom_size = eeprom_index;
+    eeprom_index = EEPROM_OFFSET_POWEROFF;
+    EEPROM_WRITE(final_crc);
+
+    SERIAL_ECHO_START();
+    SERIAL_ECHOPAIR("Poweroff Stored (", eeprom_size - EEPROM_OFFSET_POWEROFF);
+    SERIAL_ECHOPAIR(" bytes; crc ", (uint32_t)final_crc);
+    SERIAL_ECHOPAIR(")\nWrite file name: ", powerloss.P_file_name);
+ }
+
+  bool MarlinSettings::poweroff_load() {
+    uint16_t working_crc = 0, stored_crc;
+    EEPROM_START();
+    eeprom_index = EEPROM_OFFSET_POWEROFF;
+    EEPROM_READ(stored_crc);
+    working_crc = 0;
+
+    // Power Loss Recovery
+    EEPROM_READ(powerloss);
+
+    // Filament Runout Sensors
+    EEPROM_READ(filament_runout_enabled);
+    if(filament_runout_enabled != false)
+		filament_runout_enabled = true;
+
+    if (working_crc == stored_crc) {
+      #if ENABLED(EEPROM_CHITCHAT)
+        SERIAL_ECHO_START();
+        SERIAL_ECHOPAIR("poweroff stored settings retrieved (", eeprom_index - EEPROM_OFFSET_POWEROFF);
+        SERIAL_ECHOPAIR(" bytes; crc ", (uint32_t)working_crc);
+        SERIAL_ECHOPAIR(")\nread file dir: ", powerloss.print_dir);
+        SERIAL_ECHOLNPAIR("\nread file name: ", powerloss.P_file_name);
+      #endif
+    }
+    else {
+      SERIAL_ECHOPAIR("crc error: ", (uint32_t)working_crc);
+      SERIAL_ECHOLNPAIR(" != ", (uint32_t)stored_crc);
+    }
+  }
+
+
+  bool MarlinSettings::Fixed_parameter_save() {//liu
+
+	uint16_t working_crc = 0;
+	EEPROM_START();
+	eeprom_index = EEPROM_OFFSET_SN_VER;
+   
+	EEPROM_SKIP(working_crc); // Skip the checksum slot
+	working_crc = 0; 
+	EEPROM_WRITE(hardware_version);//liu hw ver
+	
+	const uint16_t final_crc = working_crc;
+	const int eeprom_size = eeprom_index;
+	eeprom_index = EEPROM_OFFSET_SN_VER;
+	EEPROM_WRITE(final_crc);
+      
+	SERIAL_ECHO_START();
+	SERIAL_ECHOPAIR("Fixed parameter (", eeprom_size - EEPROM_OFFSET_SN_VER);
+	SERIAL_ECHOPAIR("Fixed parameter bytes; crc ", (uint32_t)final_crc);
+	SERIAL_ECHOLNPGM(")");
+	
+ }
+ bool MarlinSettings::Fixed_parameter_load(){
+	uint16_t working_crc = 0;
+	uint16_t stored_crc;
+	EEPROM_START();
+	eeprom_index = EEPROM_OFFSET_SN_VER;
+	EEPROM_READ(stored_crc);
+	working_crc=0;
+	EEPROM_READ(hardware_version);//liu  hhardware_version
+	if(hardware_version< 0.1)
+	{
+		hardware_version = 0.1;	
+	}
+	SERIAL_ECHOPAIR(" hardware version:", hardware_version);//liu
+	if (working_crc == stored_crc) {
+#if ENABLED(EEPROM_CHITCHAT)
+		SERIAL_ECHO_START();
+		SERIAL_ECHOPAIR("Fixed parameter (", eeprom_index - EEPROM_OFFSET_SN_VER);
+		SERIAL_ECHOPAIR(" bytes; crc ", (uint32_t)working_crc);
+		SERIAL_ECHOLNPGM(")");
+#endif
+	}
+	else{
+		SERIAL_ECHOPAIR(" \r\nFixed parameter bytes; crc error ", (uint32_t)working_crc);
+		SERIAL_ECHOPAIR(" \r\Fixed parameter nbytes; crc error ", (uint32_t)stored_crc);
+	}
   }
 
   /**
@@ -780,6 +887,7 @@ void MarlinSettings::postprocess() {
         SERIAL_ECHOLNPGM(" Marlin=" EEPROM_VERSION ")");
       #endif
       reset();
+      save();
     }
     else {
       float dummy = 0;
@@ -1216,6 +1324,7 @@ void MarlinSettings::postprocess() {
           SERIAL_ECHOPAIR(" bytes; crc ", (uint32_t)working_crc);
           SERIAL_ECHOLNPGM(")");
         #endif
+        (void)settings.poweroff_load();
       }
       else {
         #if ENABLED(EEPROM_CHITCHAT)

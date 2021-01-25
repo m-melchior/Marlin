@@ -192,6 +192,8 @@
  * M405 - Enable Filament Sensor flow control. "M405 D<delay_cm>". (Requires FILAMENT_WIDTH_SENSOR)
  * M406 - Disable Filament Sensor flow control. (Requires FILAMENT_WIDTH_SENSOR)
  * M407 - Display measured filament diameter in millimeters. (Requires FILAMENT_WIDTH_SENSOR)
+ * M408 - Enable filament runout sensor(s). (Requires FILAMENT_RUNOUT_SENSOR)
+ * M409 - Disable filament runout sensor(s). (Requires FILAMENT_RUNOUT_SENSOR)
  * M410 - Quickstop. Abort all planned moves.
  * M420 - Enable/Disable Leveling (with current values) S1=enable S0=disable (Requires MESH_BED_LEVELING or ABL)
  * M421 - Set a single Z coordinate in the Mesh Leveling grid. X<units> Y<units> Z<units> (Requires MESH_BED_LEVELING or AUTO_BED_LEVELING_UBL)
@@ -260,6 +262,13 @@
 #include "duration_t.h"
 #include "types.h"
 #include "gcode.h"
+
+// Power Loss Recovery
+powerloss_t powerloss; // (zero'ed by bootloader)
+
+char tmp_y[50];
+
+extern char lcd_status_message[];
 
 #if HAS_ABL
   #include "vector_3.h"
@@ -635,6 +644,9 @@ uint8_t target_extruder;
 #endif
 
 float cartes[XYZ] = { 0 };
+
+// Filament Runout Sensors
+bool filament_runout_enabled = false;
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
   bool filament_sensor = false;                                 // M405 turns on filament sensor control. M406 turns it off.
@@ -9608,6 +9620,12 @@ void quickstop_stepper() {
   SYNC_PLAN_POSITION_KINEMATIC();
 }
 
+//
+// Filament Runout Sensors
+//
+inline void gcode_M408() { filament_runout_enabled = true; }
+inline void gcode_M409() { filament_runout_enabled = false; }
+
 #if HAS_LEVELING
   /**
    * M420: Enable/Disable Bed Leveling and/or set the Z fade height.
@@ -11031,6 +11049,18 @@ inline void gcode_M999() {
   // gcode_LastN = Stopped_gcode_LastN;
   FlushSerialRequestResend();
 }
+inline void gcode_M2000(){
+	
+}
+inline void gcode_M2009(){
+	if (parser.seen('V')) hardware_version = parser.value_celsius();
+	//SERIAL_ECHOPAIR("HV...:", hardware_version);//liu
+	(void)settings.Fixed_parameter_save();
+	SERIAL_ECHOLNPGM("HV_set_ok");
+	
+}
+
+		
 
 #if ENABLED(SWITCHING_EXTRUDER)
   #if EXTRUDERS > 3
@@ -12223,6 +12253,13 @@ void process_parsed_command() {
           break;
       #endif // FILAMENT_WIDTH_SENSOR
 
+      case 408:   // M408: Filament runout on
+        gcode_M408();
+        break;
+      case 409:   // M409: Filament runout off
+        gcode_M409();
+        break;
+
       #if HAS_LEVELING
         case 420: // M420: Enable/Disable Bed Leveling
           gcode_M420();
@@ -12429,6 +12466,12 @@ void process_parsed_command() {
 
       case 999: // M999: Restart after being Stopped
         gcode_M999();
+        break;
+	case 2000: //  
+        gcode_M2000();
+        break;
+      case 2009: //  
+        gcode_M2009();
         break;
     }
     break;
@@ -14350,6 +14393,7 @@ void setup() {
   SERIAL_ECHOPGM(MSG_MARLIN);
   SERIAL_CHAR(' ');
   SERIAL_ECHOLNPGM(SHORT_BUILD_VERSION);
+  //SERIAL_ECHOLNPGM(MOTHERBOARD); // [liu]
   SERIAL_EOL();
 
   #if defined(STRING_DISTRIBUTION_DATE) && defined(STRING_CONFIG_H_AUTHOR)
@@ -14371,6 +14415,8 @@ void setup() {
   // Load data from EEPROM if available (or use defaults)
   // This also updates variables in the planner, elsewhere
   (void)settings.load();
+  (void)settings.Fixed_parameter_load();
+  
 
   #if HAS_M206_COMMAND
     // Initialize current position based on home_offset
@@ -14538,6 +14584,24 @@ void setup() {
     delay(1000);
     WRITE(LCD_PINS_RS, HIGH);
   #endif
+
+  // A10 Custom pins
+ // #if PIN_EXISTS(CONTINUITY)
+    SET_INPUT(CONTINUITY_PIN);
+ // #endif
+//  #if PIN_EXISTS(FIL_RUNOUT_PIN)
+    SET_INPUT(FIL_RUNOUT_PIN);
+ // #endif
+ // #if PIN_EXISTS(FIL_RUNOUT2_PIN)
+ //   SET_INPUT(FIL_RUNOUT2_PIN);
+ // #endif
+
+  if (powerloss.recovery == Rec_Outage) {
+    lcd_goto_resume_menu();
+    //SERIAL_ECHOLN("Rec_Outage");
+    //return;
+  }
+  //SERIAL_ECHOLNPAIR("recovery=", int(powerloss.recovery));
 }
 
 /**
@@ -14601,6 +14665,71 @@ void loop() {
       --commands_in_queue;
       if (++cmd_queue_index_r >= BUFSIZE) cmd_queue_index_r = 0;
     }
+  }
+
+  if (commands_in_queue == 0) {
+    switch (powerloss.recovery) {
+      default: break;
+      case Rec_Recovering1:
+        sprintf_P(tmp_y, PSTR("M190 S%u"), powerloss.B_t);
+        //SERIAL_ECHOLN(tmp_y);
+        enqueue_and_echo_command(tmp_y);
+
+        sprintf_P(tmp_y, PSTR("M109 T0 S%u"), powerloss.T0_t);
+        //SERIAL_ECHOLN(tmp_y);
+        enqueue_and_echo_command(tmp_y);
+        
+        sprintf_P(tmp_y, PSTR("M106  S255"));
+        enqueue_and_echo_command(tmp_y);
+
+        sprintf_P(tmp_y, PSTR("G28 X"));
+        //SERIAL_ECHOLN(tmp_y);
+        enqueue_and_echo_command(tmp_y);
+
+        sprintf_P(tmp_y,PSTR("G28 Y"));
+        //SERIAL_ECHOLN(tmp_y);
+        enqueue_and_echo_command(tmp_y);
+		
+	sprintf_P(tmp_y, PSTR("G0 F1000 Z%u.%u"), powerloss.Z_t / 10, powerloss.Z_t % 10);//jone
+       enqueue_and_echo_command(tmp_y);
+
+        axis_homed[Z_AXIS] = axis_known_position[Z_AXIS] = true;
+        powerloss.recovery = Rec_Recovering2;
+        break;
+      case Rec_Recovering2:
+        if (strlen(powerloss.print_dir) > 1)
+          sprintf_P(tmp_y, PSTR("M32 S%lu !/%s/%s"), powerloss.pos_t, powerloss.print_dir, powerloss.P_file_name);
+        else
+          sprintf_P(tmp_y, PSTR("M32 S%lu !%s"), powerloss.pos_t, powerloss.P_file_name);
+
+	
+
+        //SERIAL_ECHOLNPAIR("Gco : ", tmp_y);
+
+        //ZERO(powerloss.print_dir);
+        powerloss.recovery = Rec_Idle;
+        (void)settings.poweroff_save();
+
+        enqueue_and_echo_command(tmp_y);
+        //SERIAL_ECHOLN(tmp_y);
+        break;
+    }
+  }
+
+  if (powerloss.recovery == Rec_FilRunout) {
+    SERIAL_ECHOLNPGM("filament out");
+    gcode_M25();
+    // sprintf_P(tmp_y,PSTR("M25"));
+    //  SERIAL_ECHOLN(tmp_y);
+    //  enqueue_and_echo_command(tmp_y);
+    ///////
+    if(current_position[Z_AXIS]>=5)
+	{
+		sprintf_P(tmp_y, PSTR("G28 X"));
+		//SERIAL_ECHOLN(tmp_y);
+		enqueue_and_echo_command(tmp_y);
+	}
+    powerloss.recovery = Rec_Idle;
   }
   endstops.report_state();
   idle();

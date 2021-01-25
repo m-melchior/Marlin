@@ -53,7 +53,7 @@ public:
   void openAndPrintFile(const char *name);
   void startFileprint();
   void stopSDPrint();
-  void getStatus();
+  uint32_t getStatus();
   void printingHasFinished();
 
   #if ENABLED(LONG_FILENAME_HOST_SUPPORT)
@@ -94,6 +94,7 @@ public:
   bool saving, logging, sdprinting, cardOK, filenameIsDir;
   char filename[FILENAME_LENGTH], longFilename[LONG_FILENAME_LENGTH];
   int autostart_index;
+   uint32_t filesize, sdpos;
 private:
   SdFile root, *curDir, workDir, workDirParents[MAX_DIR_DEPTH];
   uint8_t workDirDepth;
@@ -157,7 +158,7 @@ private:
   uint8_t file_subcall_ctr;
   uint32_t filespos[SD_PROCEDURE_DEPTH];
   char proc_filenames[SD_PROCEDURE_DEPTH][MAXPATHNAMELENGTH];
-  uint32_t filesize, sdpos;
+  //uint32_t filesize, sdpos;
 
   millis_t next_autostart_ms;
   bool autostart_stilltocheck; //the sd start is delayed, because otherwise the serial cannot answer fast enought to make contact with the hostsoftware.
